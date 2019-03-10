@@ -13,7 +13,7 @@ keywords = ["ode", "math", "solver", "equations"]
 categories = ["science"]
 
 license = "BSD-3-Clause"
+edition = "2018"
 
 [dependencies]
-nalgebra = "0.17.2"
-alga = "0.8.2"
+ndarray = "0.12.1"

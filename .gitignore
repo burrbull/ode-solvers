@@ -3,3 +3,4 @@ target
 mkdocs.yml
 docs
 outputs
+Cargo.lock
