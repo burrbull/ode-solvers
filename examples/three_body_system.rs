@@ -1,9 +1,8 @@
-extern crate ode_solvers;
+use ndarray as nd;
 use ode_solvers::dop853::*;
-use ode_solvers::*;
 
 // Define type aliases for the state and time types
-type State = Vector6<f64>;
+type State = nd::Array1<f64>;
 type Time = f64;
 
 use std::f64;
@@ -15,7 +14,7 @@ use std::path::Path;
 const MU: f64 = 0.012300118882173;
 
 fn main() {
-    let y0 = State::new(-0.271, -0.42, 0.0, 0.3, -1.0, 0.0);
+    let y0 = nd::arr1(&[-0.271, -0.42, 0.0, 0.3, -1.0, 0.0]);
     let mut stepper = Dop853::new(system, 0.0, 150.0, 0.002, y0, 1.0e-14, 1.0e-14);
     let res = stepper.integrate();
 

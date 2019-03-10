@@ -1,15 +1,14 @@
 // Chemical reaction of Robertson.
 // This ode is stiff and is used to test the automatic stiffness detection in dopri5 and/or dop853.
 
-extern crate ode_solvers;
+use ndarray as nd;
 use ode_solvers::dop853::*;
-use ode_solvers::*;
 
-type State = Vector3<f64>;
+type State = nd::Array1<f64>;
 type Time = f64;
 
 fn main() {
-    let y0 = State::new(1.0, 0.0, 0.0);
+    let y0 = nd::arr1(&[1.0, 0.0, 0.0]);
     let mut stepper = Dop853::new(system, 0.0, 0.3, 0.3, y0, 1.0e-2, 1.0e-6);
     let res = stepper.integrate();
 

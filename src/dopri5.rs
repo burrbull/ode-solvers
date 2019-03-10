@@ -53,8 +53,8 @@ use crate::controller::Controller;
 use crate::dop_shared::*;
 use std::f64;
 
-type V = crate::nd::Array1<f64>;
-type W = crate::nd::Array2<f64>;
+type V = ndarray::Array1<f64>;
+type W = ndarray::Array2<f64>;
 
 trait DefaultController {
     fn default(x: f64, x_end: f64) -> Self;
@@ -63,15 +63,7 @@ trait DefaultController {
 impl DefaultController for Controller {
     fn default(x: f64, x_end: f64) -> Self {
         let alpha = 0.2 - 0.04 * 0.75;
-        Controller::new(
-            alpha,
-            0.04,
-            10.0,
-            0.2,
-            x_end - x,
-            0.9,
-            sign(1.0, x_end - x),
-        )
+        Controller::new(alpha, 0.04, 10.0, 0.2, x_end - x, 0.9, sign(1.0, x_end - x))
     }
 }
 
@@ -134,8 +126,8 @@ impl Dopri5 {
             y,
             rtol,
             atol,
-            x_out: Vec::<f64>::new(),
-            y_out: Vec::<V>::new(),
+            x_out: Vec::new(),
+            y_out: Vec::new(),
             uround: f64::EPSILON,
             h: 0.0,
             h_old: 0.0,
@@ -146,7 +138,7 @@ impl Dopri5 {
             out_type: OutputType::Dense,
             rcont: W::zeros((5, dim)),
             stats: Stats::new(),
-            solout: |_, _, _| { false },
+            solout: |_, _, _| false,
         }
     }
 
@@ -202,8 +194,8 @@ impl Dopri5 {
             y,
             rtol,
             atol,
-            x_out: Vec::<f64>::new(),
-            y_out: Vec::<V>::new(),
+            x_out: Vec::new(),
+            y_out: Vec::new(),
             uround: f64::EPSILON,
             h,
             h_old: 0.0,
@@ -222,7 +214,7 @@ impl Dopri5 {
             out_type,
             rcont: W::zeros((5, dim)),
             stats: Stats::new(),
-            solout: |_, _, _| { false },
+            solout: |_, _, _| false,
         }
     }
 
@@ -310,7 +302,7 @@ impl Dopri5 {
             self.y_out.push(self.y.to_owned());
         }
 
-        let mut k: Vec<V> = vec![V::zeros(dim); 7];
+        let mut k = vec![V::zeros(dim); 7];
         (self.f)(self.x, &self.y, &mut k[0]);
         self.stats.num_eval += 1;
 
@@ -353,14 +345,15 @@ impl Dopri5 {
 
             // Prepare dense output
             if self.out_type == OutputType::Dense {
-                self.rcont.row_mut(0).assign(&(
-                    (k[0].to_owned() * self.coeffs.d(1)
-                    + k[2].to_owned() * self.coeffs.d(3)
-                    + k[3].to_owned() * self.coeffs.d(4)
-                    + k[4].to_owned() * self.coeffs.d(5)
-                    + k[5].to_owned() * self.coeffs.d(6)
-                    + k[1].to_owned() * self.coeffs.d(7))
-                    * self.h));
+                self.rcont.row_mut(0).assign(
+                    &((k[0].to_owned() * self.coeffs.d(1)
+                        + k[2].to_owned() * self.coeffs.d(3)
+                        + k[3].to_owned() * self.coeffs.d(4)
+                        + k[4].to_owned() * self.coeffs.d(5)
+                        + k[5].to_owned() * self.coeffs.d(6)
+                        + k[1].to_owned() * self.coeffs.d(7))
+                        * self.h),
+                );
             }
 
             // Compute error estimate
@@ -418,7 +411,9 @@ impl Dopri5 {
                     self.rcont.row_mut(0).assign(&self.y);
                     self.rcont.row_mut(1).assign(&ydiff);
                     self.rcont.row_mut(2).assign(&bspl);
-                    self.rcont.row_mut(3).assign(&(-k[1].to_owned() * self.h + &ydiff - bspl));
+                    self.rcont
+                        .row_mut(3)
+                        .assign(&(-k[1].to_owned() * self.h + &ydiff - bspl));
                 }
 
                 k[0] = k[1].to_owned();
@@ -454,7 +449,12 @@ impl Dopri5 {
                     let theta1 = 1.0 - theta;
                     self.x_out.push(self.xd);
                     self.y_out.push(
-                        (((self.rcont.row(4).to_owned() * theta1 + self.rcont.row(3)) * theta + self.rcont.row(2)) * theta1 + self.rcont.row(1)) * theta + self.rcont.row(0),
+                        (((self.rcont.row(4).to_owned() * theta1 + self.rcont.row(3)) * theta
+                            + self.rcont.row(2))
+                            * theta1
+                            + self.rcont.row(1))
+                            * theta
+                            + self.rcont.row(0),
                     );
                     self.xd += self.dx;
                 }

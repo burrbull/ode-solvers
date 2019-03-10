@@ -1,8 +1,8 @@
 // The equations of motion describing the motion of a spacecraft on a Kepler
 // orbit are integrated using Dopri5.
 
-use ode_solvers::dopri5::*;
 use ndarray as nd;
+use ode_solvers::dopri5::*;
 
 type State = nd::Array1<f64>;
 type Time = f64;
@@ -29,7 +29,7 @@ fn main() {
     ]);
 
     let mut stepper = Dopri5::new(system, 0.0, 5.0 * period, 60.0, y0, 1.0e-10, 1.0e-10);
-    stepper.set_solout(|_t,y,_dy| { y[0] > 25500. });
+    stepper.set_solout(|_t, y, _dy| y[0] > 25500.);
     let res = stepper.integrate();
 
     // Handle result

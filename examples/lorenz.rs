@@ -1,14 +1,13 @@
 // Lorenz attractor
 
-extern crate ode_solvers;
+use ndarray as nd;
 use ode_solvers::dop853::*;
-use ode_solvers::*;
 
 use std::fs::File;
 use std::io::prelude::*;
 use std::path::Path;
 
-type State = Vector3<f64>;
+type State = nd::Array1<f64>;
 type Time = f64;
 
 // Define problem specific constants
@@ -18,7 +17,7 @@ const RHO: f64 = 28.0;
 
 fn main() {
     // Initial state
-    let y0 = State::new(1.0, 1.0, 1.0);
+    let y0 = nd::arr1(&[1.0, 1.0, 1.0]);
 
     // Create stepper and integrate
     let mut stepper = Dop853::new(system, 0.0, 100.0, 1e-3, y0, 1e-4, 1e-4);

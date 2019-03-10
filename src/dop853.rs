@@ -45,14 +45,13 @@
 
 //! Explicit Runge-Kutta method with Dormand-Prince coefficients of order 8(5,3) and dense output of order 7.
 
-use alga::general::SubsetOf;
-use alga::linear::{FiniteDimInnerSpace, InnerSpace};
-use butcher_tableau::Dopri853;
-use controller::Controller;
-use dop_shared::*;
-use na;
+use crate::butcher_tableau::Dopri853;
+use crate::controller::Controller;
+use crate::dop_shared::*;
 use std::f64;
-use std::f64::EPSILON;
+
+type V = ndarray::Array1<f64>;
+type W = ndarray::Array2<f64>;
 
 trait DefaultController {
     fn default(x: f64, x_end: f64) -> Self;
@@ -61,22 +60,11 @@ trait DefaultController {
 impl DefaultController for Controller {
     fn default(x: f64, x_end: f64) -> Self {
         let alpha = 1.0 / 8.0;
-        Controller::new(
-            alpha,
-            0.0,
-            6.0,
-            0.333,
-            x_end - x,
-            0.9,
-            sign(1.0, x_end - x),
-        )
+        Controller::new(alpha, 0.0, 6.0, 0.333, x_end - x, 0.9, sign(1.0, x_end - x))
     }
 }
 /// Structure containing the parameters for the numerical integration.
-pub struct Dop853<V>
-where
-    V: FiniteDimInnerSpace + Copy,
-{
+pub struct Dop853 {
     f: fn(f64, &V, &mut V),
     x: f64,
     x0: f64,
@@ -97,15 +85,11 @@ where
     coeffs: Dopri853,
     controller: Controller,
     out_type: OutputType,
-    rcont: [V; 8],
+    rcont: W,
     stats: Stats,
 }
 
-impl<V> Dop853<V>
-where
-    V: FiniteDimInnerSpace + Copy,
-    <V as InnerSpace>::Real: SubsetOf<f64>,
-{
+impl Dop853 {
     /// Default initializer for the structure.
     ///
     /// # Arguments
@@ -126,8 +110,9 @@ where
         y: V,
         rtol: f64,
         atol: f64,
-    ) -> Dop853<V> {
-        Dop853 {
+    ) -> Self {
+        let dim = y.dim();
+        Self {
             f,
             x,
             x0: x,
@@ -138,8 +123,8 @@ where
             y,
             rtol,
             atol,
-            x_out: Vec::<f64>::new(),
-            y_out: Vec::<V>::new(),
+            x_out: Vec::new(),
+            y_out: Vec::new(),
             uround: f64::EPSILON,
             h: 0.0,
             h_old: 0.0,
@@ -148,7 +133,7 @@ where
             coeffs: Dopri853::new(),
             controller: Controller::default(x, x_end),
             out_type: OutputType::Dense,
-            rcont: [V::zero(); 8],
+            rcont: W::zeros((8, dim)),
             stats: Stats::new(),
         }
     }
@@ -192,9 +177,10 @@ where
         n_max: u32,
         n_stiff: u32,
         out_type: OutputType,
-    ) -> Dop853<V> {
+    ) -> Self {
         let alpha = 1.0 / 8.0 - beta * 0.2;
-        Dop853 {
+        let dim = y.dim();
+        Self {
             f,
             x,
             x0: x,
@@ -205,8 +191,8 @@ where
             y,
             rtol,
             atol,
-            x_out: Vec::<f64>::new(),
-            y_out: Vec::<V>::new(),
+            x_out: Vec::new(),
+            y_out: Vec::new(),
             uround: f64::EPSILON,
             h,
             h_old: h,
@@ -223,26 +209,26 @@ where
                 sign(1.0, x_end - x),
             ),
             out_type,
-            rcont: [V::zero(); 8],
+            rcont: W::zeros((8, dim)),
             stats: Stats::new(),
         }
     }
 
     /// Compute the initial stepsize
     fn hinit(&self) -> f64 {
-        let mut f0 = V::zero();
+        let dim = self.y.dim();
+        let mut f0 = V::zeros(dim);
         (self.f)(self.x, &self.y, &mut f0);
         let posneg = sign(1.0, self.x_end - self.x);
 
         // Compute the norm of y0 and f0
-        let dim = na::dimension::<V>();
         let mut d0 = 0.0;
         let mut d1 = 0.0;
         for i in 0..dim {
-            let y_i: f64 = na::convert(self.y[i]);
+            let y_i: f64 = self.y[i];
             let sci: f64 = self.atol + y_i.abs() * self.rtol;
             d0 += (y_i / sci) * (y_i / sci);
-            let f0_i: f64 = na::convert(f0[i]);
+            let f0_i: f64 = f0[i];
             d1 += (f0_i / sci) * (f0_i / sci);
         }
 
@@ -256,16 +242,16 @@ where
         h0 = h0.min(self.controller.h_max());
         h0 = sign(h0, posneg);
 
-        let y1 = self.y + f0 * na::convert(h0);
-        let mut f1 = V::zero();
+        let y1 = f0.to_owned() * h0 + &self.y;
+        let mut f1 = V::zeros(dim);
         (self.f)(self.x + h0, &y1, &mut f1);
 
         // Compute the norm of f1-f0 divided by h0
         let mut d2: f64 = 0.0;
         for i in 0..dim {
-            let f0_i: f64 = na::convert(f0[i]);
-            let f1_i: f64 = na::convert(f1[i]);
-            let y_i: f64 = na::convert(self.y[i]);
+            let f0_i: f64 = f0[i];
+            let f1_i: f64 = f1[i];
+            let y_i: f64 = self.y[i];
             let sci: f64 = self.atol + y_i.abs() * self.rtol;
             d2 += ((f1_i - f0_i) / sci) * ((f1_i - f0_i) / sci);
         }
@@ -290,7 +276,7 @@ where
         let mut n_step = 0;
         let mut last = false;
         let mut h_new = 0.0;
-        let dim = na::dimension::<V>();
+        let dim = self.y.dim();
         let mut iter_non_stiff = 1..7;
         let mut iter_iasti = 1..16;
         let posneg = sign(1.0, self.x_end - self.x);
@@ -302,10 +288,10 @@ where
         self.h_old = self.h;
 
         // Save initial values
-        let y_tmp = self.y;
+        let y_tmp = self.y.to_owned();
         self.solution_output(y_tmp);
 
-        let mut k: Vec<V> = vec![V::zero(); 12];
+        let mut k = vec![V::zeros(dim); 12];
         (self.f)(self.x, &self.y, &mut k[0]);
         self.stats.num_eval += 1;
 
@@ -331,50 +317,50 @@ where
             n_step += 1;
 
             // 12 Stages
-            let mut y_next = V::zero();
+            let mut y_next = V::zeros(dim);
             for s in 1..12 {
-                y_next = self.y;
+                y_next.assign(&self.y);
                 for j in 0..s {
-                    y_next += k[j] * na::convert(self.h * self.coeffs.a(s + 1, j + 1));
+                    y_next += &(k[j].to_owned() * (self.h * self.coeffs.a(s + 1, j + 1)));
                 }
                 (self.f)(self.x + self.h * self.coeffs.c(s + 1), &y_next, &mut k[s]);
             }
-            k[1] = k[10];
-            k[2] = k[11];
+            k[1] = k[10].to_owned();
+            k[2] = k[11].to_owned();
             self.stats.num_eval += 11;
 
-            k[3] = k[0] * na::convert(self.coeffs.b(1))
-                + k[5] * na::convert(self.coeffs.b(6))
-                + k[6] * na::convert(self.coeffs.b(7))
-                + k[7] * na::convert(self.coeffs.b(8))
-                + k[8] * na::convert(self.coeffs.b(9))
-                + k[9] * na::convert(self.coeffs.b(10))
-                + k[1] * na::convert(self.coeffs.b(11))
-                + k[2] * na::convert(self.coeffs.b(12));
-            k[4] = self.y + k[3] * na::convert(self.h);
+            k[3] = k[0].to_owned() * self.coeffs.b(1)
+                + k[5].to_owned() * self.coeffs.b(6)
+                + k[6].to_owned() * self.coeffs.b(7)
+                + k[7].to_owned() * self.coeffs.b(8)
+                + k[8].to_owned() * self.coeffs.b(9)
+                + k[9].to_owned() * self.coeffs.b(10)
+                + k[1].to_owned() * self.coeffs.b(11)
+                + k[2].to_owned() * self.coeffs.b(12);
+            k[4] = k[3].to_owned() * self.h + &self.y;
 
             // Error estimate
-            let mut err_est = V::zero();
+            let mut err_est = V::zeros(dim);
             for i in 0..12 {
-                err_est += k[i] * na::convert(self.coeffs.e(i + 1));
+                err_est += &(k[i].to_owned() * self.coeffs.e(i + 1));
             }
 
             // Compute error
             let mut err = 0.0;
             let mut err2 = 0.0;
-            let err_bhh = k[3]
-                - k[0] * na::convert(self.coeffs.bhh(1))
-                - k[8] * na::convert(self.coeffs.bhh(2))
-                - k[2] * na::convert(self.coeffs.bhh(3));
+            let err_bhh = k[3].to_owned()
+                - k[0].to_owned() * self.coeffs.bhh(1)
+                - k[8].to_owned() * self.coeffs.bhh(2)
+                - k[2].to_owned() * self.coeffs.bhh(3);
             for i in 0..dim {
-                let y_i: f64 = na::convert(self.y[i]);
-                let k5_i: f64 = na::convert(k[4][i]);
+                let y_i: f64 = self.y[i];
+                let k5_i: f64 = k[4][i];
                 let sc_i: f64 = self.atol + y_i.abs().max(k5_i.abs()) * self.rtol;
 
-                let err_est_i: f64 = na::convert(err_est[i]);
+                let err_est_i: f64 = err_est[i];
                 err += (err_est_i / sc_i) * (err_est_i / sc_i);
 
-                let erri: f64 = na::convert(err_bhh[i]);
+                let erri: f64 = err_bhh[i];
                 err2 += (erri / sc_i) * (erri / sc_i);
             }
             let mut deno = err + 0.01 * err2;
@@ -387,14 +373,16 @@ where
             // Step size control
             if self.controller.accept(err, self.h, &mut h_new) {
                 self.stats.accepted_steps += 1;
-                let y_tmp = k[4];
+                let y_tmp = k[4].to_owned();
                 (self.f)(self.x + self.h, &y_tmp, &mut k[3]);
                 self.stats.num_eval += 1;
 
                 // Stifness detection
                 if (self.stats.accepted_steps % self.n_stiff != 0) || dim > 0 {
-                    let num: f64 = na::convert((k[3] - k[2]).dot(&(k[3] - k[2])));
-                    let den: f64 = na::convert((k[4] - y_next).dot(&(k[4] - y_next)));
+                    let kd = k[3].to_owned() - &k[2];
+                    let num: f64 = kd.dot(&kd);
+                    let yd = k[4].to_owned() - &y_next;
+                    let den: f64 = yd.dot(&yd);
                     let h_lamb = if den > 0.0 {
                         self.h * (num / den).sqrt()
                     } else {
@@ -413,91 +401,106 @@ where
                 }
 
                 if self.out_type == OutputType::Dense {
-                    self.rcont[0] = self.y;
-                    let y_diff = k[4] - self.y;
-                    self.rcont[1] = y_diff;
-                    let bspl = k[0] * na::convert(self.h) - y_diff;
-                    self.rcont[2] = bspl;
-                    self.rcont[3] = y_diff - k[3] * na::convert(self.h) - bspl;
+                    self.rcont.row_mut(0).assign(&self.y);
+                    let y_diff = k[4].to_owned() - &self.y;
+                    self.rcont.row_mut(1).assign(&y_diff);
+                    let bspl = k[0].to_owned() * self.h - &y_diff;
+                    self.rcont.row_mut(2).assign(&bspl);
+                    self.rcont
+                        .row_mut(3)
+                        .assign(&(-k[3].to_owned() * self.h + y_diff - bspl));
                     for i in 4..8 {
-                        self.rcont[i] = V::zero();
+                        self.rcont.row_mut(i).assign(&V::zeros(dim));
+                        let rcontcopy = self.rcont.clone();
                         for j in 1..13 {
-                            self.rcont[i] += k[j - 1] * na::convert(self.coeffs.d(i, j));
+                            self.rcont.row_mut(i).assign(
+                                &(k[j - 1].to_owned() * self.coeffs.d(i, j) + rcontcopy.row(i)),
+                            );
                         }
                     }
 
                     // Next three function evaluations
-                    let mut y_next = self.y
-                        + (k[0] * na::convert(self.coeffs.a(14, 1))
-                            + k[6] * na::convert(self.coeffs.a(14, 7))
-                            + k[7] * na::convert(self.coeffs.a(14, 8))
-                            + k[8] * na::convert(self.coeffs.a(14, 9))
-                            + k[9] * na::convert(self.coeffs.a(14, 10))
-                            + k[1] * na::convert(self.coeffs.a(14, 11))
-                            + k[2] * na::convert(self.coeffs.a(14, 12))
-                            + k[3] * na::convert(self.coeffs.a(14, 13)))
-                            * na::convert(self.h);
+                    let mut y_next = self.y.to_owned()
+                        + (k[0].to_owned() * self.coeffs.a(14, 1)
+                            + k[6].to_owned() * self.coeffs.a(14, 7)
+                            + k[7].to_owned() * self.coeffs.a(14, 8)
+                            + k[8].to_owned() * self.coeffs.a(14, 9)
+                            + k[9].to_owned() * self.coeffs.a(14, 10)
+                            + k[1].to_owned() * self.coeffs.a(14, 11)
+                            + k[2].to_owned() * self.coeffs.a(14, 12)
+                            + k[3].to_owned() * self.coeffs.a(14, 13))
+                            * self.h;
                     (self.f)(self.x + self.h * self.coeffs.c(14), &y_next, &mut k[9]);
 
-                    y_next = self.y
-                        + (k[0] * na::convert(self.coeffs.a(15, 1))
-                            + k[5] * na::convert(self.coeffs.a(15, 6))
-                            + k[6] * na::convert(self.coeffs.a(15, 7))
-                            + k[7] * na::convert(self.coeffs.a(15, 8))
-                            + k[1] * na::convert(self.coeffs.a(15, 11))
-                            + k[2] * na::convert(self.coeffs.a(15, 12))
-                            + k[3] * na::convert(self.coeffs.a(15, 13))
-                            + k[9] * na::convert(self.coeffs.a(15, 14)))
-                            * na::convert(self.h);
+                    y_next = self.y.to_owned()
+                        + (k[0].to_owned() * self.coeffs.a(15, 1)
+                            + k[5].to_owned() * self.coeffs.a(15, 6)
+                            + k[6].to_owned() * self.coeffs.a(15, 7)
+                            + k[7].to_owned() * self.coeffs.a(15, 8)
+                            + k[1].to_owned() * self.coeffs.a(15, 11)
+                            + k[2].to_owned() * self.coeffs.a(15, 12)
+                            + k[3].to_owned() * self.coeffs.a(15, 13)
+                            + k[9].to_owned() * self.coeffs.a(15, 14))
+                            * self.h;
                     (self.f)(self.x + self.h * self.coeffs.c(15), &y_next, &mut k[1]);
 
-                    y_next = self.y
-                        + (k[0] * na::convert(self.coeffs.a(16, 1))
-                            + k[5] * na::convert(self.coeffs.a(16, 6))
-                            + k[6] * na::convert(self.coeffs.a(16, 7))
-                            + k[7] * na::convert(self.coeffs.a(16, 8))
-                            + k[8] * na::convert(self.coeffs.a(16, 9))
-                            + k[3] * na::convert(self.coeffs.a(16, 13))
-                            + k[9] * na::convert(self.coeffs.a(16, 14))
-                            + k[1] * na::convert(self.coeffs.a(16, 15)))
-                            * na::convert(self.h);
+                    y_next = self.y.to_owned()
+                        + (k[0].to_owned() * self.coeffs.a(16, 1)
+                            + k[5].to_owned() * self.coeffs.a(16, 6)
+                            + k[6].to_owned() * self.coeffs.a(16, 7)
+                            + k[7].to_owned() * self.coeffs.a(16, 8)
+                            + k[8].to_owned() * self.coeffs.a(16, 9)
+                            + k[3].to_owned() * self.coeffs.a(16, 13)
+                            + k[9].to_owned() * self.coeffs.a(16, 14)
+                            + k[1].to_owned() * self.coeffs.a(16, 15))
+                            * self.h;
                     (self.f)(self.x + self.h * self.coeffs.c(16), &y_next, &mut k[2]);
 
                     self.stats.num_eval += 3;
 
-                    self.rcont[4] = (self.rcont[4]
-                        + k[3] * na::convert(self.coeffs.d(4, 13))
-                        + k[9] * na::convert(self.coeffs.d(4, 14))
-                        + k[1] * na::convert(self.coeffs.d(4, 15))
-                        + k[2] * na::convert(self.coeffs.d(4, 16)))
-                        * na::convert(self.h);
-                    self.rcont[5] = (self.rcont[5]
-                        + k[3] * na::convert(self.coeffs.d(5, 13))
-                        + k[9] * na::convert(self.coeffs.d(5, 14))
-                        + k[1] * na::convert(self.coeffs.d(5, 15))
-                        + k[2] * na::convert(self.coeffs.d(5, 16)))
-                        * na::convert(self.h);
-                    self.rcont[6] = (self.rcont[6]
-                        + k[3] * na::convert(self.coeffs.d(6, 13))
-                        + k[9] * na::convert(self.coeffs.d(6, 14))
-                        + k[1] * na::convert(self.coeffs.d(6, 15))
-                        + k[2] * na::convert(self.coeffs.d(6, 16)))
-                        * na::convert(self.h);
-                    self.rcont[7] = (self.rcont[7]
-                        + k[3] * na::convert(self.coeffs.d(7, 13))
-                        + k[9] * na::convert(self.coeffs.d(7, 14))
-                        + k[1] * na::convert(self.coeffs.d(7, 15))
-                        + k[2] * na::convert(self.coeffs.d(7, 16)))
-                        * na::convert(self.h);
+                    let rcontcopy = self.rcont.clone();
+
+                    self.rcont.row_mut(4).assign(
+                        &((rcontcopy.row(4).to_owned()
+                            + k[3].to_owned() * self.coeffs.d(4, 13)
+                            + k[9].to_owned() * self.coeffs.d(4, 14)
+                            + k[1].to_owned() * self.coeffs.d(4, 15)
+                            + k[2].to_owned() * self.coeffs.d(4, 16))
+                            * self.h),
+                    );
+                    self.rcont.row_mut(5).assign(
+                        &((rcontcopy.row(5).to_owned()
+                            + k[3].to_owned() * self.coeffs.d(5, 13)
+                            + k[9].to_owned() * self.coeffs.d(5, 14)
+                            + k[1].to_owned() * self.coeffs.d(5, 15)
+                            + k[2].to_owned() * self.coeffs.d(5, 16))
+                            * self.h),
+                    );
+                    self.rcont.row_mut(6).assign(
+                        &((rcontcopy.row(6).to_owned()
+                            + k[3].to_owned() * self.coeffs.d(6, 13)
+                            + k[9].to_owned() * self.coeffs.d(6, 14)
+                            + k[1].to_owned() * self.coeffs.d(6, 15)
+                            + k[2].to_owned() * self.coeffs.d(6, 16))
+                            * self.h),
+                    );
+                    self.rcont.row_mut(7).assign(
+                        &((rcontcopy.row(7).to_owned()
+                            + k[3].to_owned() * self.coeffs.d(7, 13)
+                            + k[9].to_owned() * self.coeffs.d(7, 14)
+                            + k[1].to_owned() * self.coeffs.d(7, 15)
+                            + k[2].to_owned() * self.coeffs.d(7, 16))
+                            * self.h),
+                    );
                 }
 
-                k[0] = k[3];
-                self.y = k[4];
+                k[0] = k[3].to_owned();
+                self.y.assign(&k[4]);
                 self.x_old = self.x;
                 self.x += self.h;
                 self.h_old = self.h;
 
-                self.solution_output(k[4]);
+                self.solution_output(k[4].to_owned());
 
                 // Normal exit
                 if last {
@@ -515,9 +518,9 @@ where
     /// If a dense output is required, computes the solution and pushes it into the output vector. Else, pushes the solution into the output vector.
     fn solution_output(&mut self, y_next: V) {
         if self.out_type == OutputType::Dense {
-            if (self.xd - self.x0).abs() < EPSILON {
+            if (self.xd - self.x0).abs() < f64::EPSILON {
                 self.x_out.push(self.x0);
-                self.y_out.push(self.y);
+                self.y_out.push(self.y.to_owned());
                 self.xd += self.dx;
             } else {
                 while self.xd.abs() <= self.x.abs() {
@@ -526,20 +529,19 @@ where
                         let theta1 = 1.0 - theta;
                         self.x_out.push(self.xd);
                         self.y_out.push(
-                            self.rcont[0]
-                                + (self.rcont[1]
-                                    + (self.rcont[2]
-                                        + (self.rcont[3]
-                                            + (self.rcont[4]
-                                                + (self.rcont[5]
-                                                    + (self.rcont[6]
-                                                        + self.rcont[7] * na::convert(theta))
-                                                        * na::convert(theta1))
-                                                    * na::convert(theta))
-                                                * na::convert(theta1))
-                                            * na::convert(theta))
-                                        * na::convert(theta1))
-                                    * na::convert(theta),
+                            ((((((self.rcont.row(7).to_owned() * theta + self.rcont.row(6))
+                                * theta1
+                                + self.rcont.row(5))
+                                * theta
+                                + self.rcont.row(4))
+                                * theta1
+                                + self.rcont.row(3))
+                                * theta
+                                + self.rcont.row(2))
+                                * theta1
+                                + self.rcont.row(1))
+                                * theta
+                                + self.rcont.row(0),
                         );
                         self.xd += self.dx;
                     }
