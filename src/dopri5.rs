@@ -68,8 +68,8 @@ impl DefaultController for Controller {
 }
 
 /// Structure containing the parameters for the numerical integration.
-pub struct Dopri5 {
-    f: fn(f64, &V, &mut V),
+pub struct Dopri5<F: System> {
+    f: F,
     x: f64,
     x_old: f64,
     x_end: f64,
@@ -93,7 +93,7 @@ pub struct Dopri5 {
     solout: fn(f64, &V, &V) -> bool,
 }
 
-impl Dopri5 {
+impl<F: System> Dopri5<F> {
     /// Default initializer for the structure
     ///
     /// # Arguments
@@ -107,7 +107,7 @@ impl Dopri5 {
     /// * `atol`    - Absolute tolerance used in the computation of the adaptive step size
     ///
     pub fn new(
-        f: fn(f64, &V, &mut V),
+        f: F,
         x: f64,
         x_end: f64,
         dx: f64,
@@ -115,7 +115,6 @@ impl Dopri5 {
         rtol: f64,
         atol: f64,
     ) -> Self {
-        let dim = y.dim();
         Self {
             f,
             x,
@@ -136,7 +135,7 @@ impl Dopri5 {
             coeffs: Dopri54::new(),
             controller: Controller::default(x, x_end),
             out_type: OutputType::Dense,
-            rcont: W::zeros((5, dim)),
+            rcont: W::zeros((5, F::DIM)),
             stats: Stats::new(),
             solout: |_, _, _| false,
         }
@@ -165,7 +164,7 @@ impl Dopri5 {
     ///
     #[allow(clippy::too_many_arguments)]
     pub fn from_param(
-        f: fn(f64, &V, &mut V),
+        f: F,
         x: f64,
         x_end: f64,
         dx: f64,
@@ -183,12 +182,11 @@ impl Dopri5 {
         out_type: OutputType,
     ) -> Self {
         let alpha = 0.2 - beta * 0.75;
-        let dim = y.dim();
         Self {
             f,
             x,
             xd: x,
-            x_old: 0.0,
+            x_old: 0.,
             x_end,
             dx,
             y,
@@ -198,7 +196,7 @@ impl Dopri5 {
             y_out: Vec::new(),
             uround: f64::EPSILON,
             h,
-            h_old: 0.0,
+            h_old: 0.,
             n_max,
             n_stiff,
             coeffs: Dopri54::new(),
@@ -209,10 +207,10 @@ impl Dopri5 {
                 fac_min,
                 h_max,
                 safety_factor,
-                sign(1.0, x_end - x),
+                sign(1., x_end - x),
             ),
             out_type,
-            rcont: W::zeros((5, dim)),
+            rcont: W::zeros((5, F::DIM)),
             stats: Stats::new(),
             solout: |_, _, _| false,
         }
@@ -220,15 +218,14 @@ impl Dopri5 {
 
     /// Compute the initial stepsize
     fn hinit(&self) -> f64 {
-        let dim = self.y.dim();
-        let mut f0 = V::zeros(dim);
-        (self.f)(self.x, &self.y, &mut f0);
+        let mut f0 = V::zeros(F::DIM);
+        self.f.system(self.x, &self.y, &mut f0);
         let posneg = sign(1.0, self.x_end - self.x);
 
         // Compute the norm of y0 and f0
         let mut d0 = 0.0;
         let mut d1 = 0.0;
-        for i in 0..dim {
+        for i in 0..F::DIM {
             let y_i: f64 = self.y[i];
             let sci: f64 = self.atol + y_i.abs() * self.rtol;
             d0 += (y_i / sci) * (y_i / sci);
@@ -237,8 +234,8 @@ impl Dopri5 {
         }
 
         // Compute h0
-        let mut h0 = if d0 < 1.0E-10 || d1 < 1.0E-10 {
-            1.0E-6
+        let mut h0 = if d0 < 1_e-10 || d1 < 1_e-10 {
+            1_e-6
         } else {
             0.01 * (d0 / d1).sqrt()
         };
@@ -247,12 +244,12 @@ impl Dopri5 {
         h0 = sign(h0, posneg);
 
         let y1 = f0.to_owned() * h0 + &self.y;
-        let mut f1 = V::zeros(dim);
-        (self.f)(self.x + h0, &y1, &mut f1);
+        let mut f1 = V::zeros(F::DIM);
+        self.f.system(self.x + h0, &y1, &mut f1);
 
         // Compute the norm of f1-f0 divided by h0
-        let mut d2: f64 = 0.0;
-        for i in 0..dim {
+        let mut d2: f64 = 0.;
+        for i in 0..F::DIM {
             let f0_i: f64 = f0[i];
             let f1_i: f64 = f1[i];
             let y_i: f64 = self.y[i];
@@ -261,14 +258,14 @@ impl Dopri5 {
         }
         d2 = d2.sqrt() / h0;
 
-        let h1 = if d1.sqrt().max(d2.abs()) <= 1.0E-15 {
-            (1.0E-6 as f64).max(h0.abs() * 1.0E-3)
+        let h1 = if d1.sqrt().max(d2.abs()) <= 1_e-15 {
+            (1_e-6 as f64).max(h0.abs() * 1_e-3)
         } else {
-            (0.01 / (d1.sqrt().max(d2))).powf(1.0 / 5.0)
+            (0.01 / (d1.sqrt().max(d2))).powf(1. / 5.)
         };
 
         sign(
-            (100.0 * h0.abs()).min(h1.min(self.controller.h_max())),
+            (100. * h0.abs()).min(h1.min(self.controller.h_max())),
             posneg,
         )
     }
@@ -284,13 +281,12 @@ impl Dopri5 {
         self.x_old = self.x;
         let mut n_step = 0;
         let mut last = false;
-        let mut h_new = 0.0;
-        let dim = self.y.dim();
+        let mut h_new = 0.;
         let mut iter_non_stiff = 1..7;
         let mut iter_iasti = 1..16;
-        let posneg = sign(1.0, self.x_end - self.x);
+        let posneg = sign(1., self.x_end - self.x);
 
-        if self.h == 0.0 {
+        if self.h == 0. {
             self.h = self.hinit();
             self.stats.num_eval += 2;
         }
@@ -302,8 +298,8 @@ impl Dopri5 {
             self.y_out.push(self.y.to_owned());
         }
 
-        let mut k = vec![V::zeros(dim); 7];
-        (self.f)(self.x, &self.y, &mut k[0]);
+        let mut k = vec![V::zeros(F::DIM); 7];
+        self.f.system(self.x, &self.y, &mut k[0]);
         self.stats.num_eval += 1;
 
         // Main loop
@@ -321,21 +317,21 @@ impl Dopri5 {
             }
 
             // Check if it's the last iteration
-            if (self.x + 1.01 * self.h - self.x_end) * posneg > 0.0 {
+            if (self.x + 1.01 * self.h - self.x_end) * posneg > 0. {
                 self.h = self.x_end - self.x;
                 last = true;
             }
             n_step += 1;
 
             // 6 Stages
-            let mut y_next = V::zeros(dim);
-            let mut y_stiff = V::zeros(dim);
+            let mut y_next = V::zeros(F::DIM);
+            let mut y_stiff = V::zeros(F::DIM);
             for s in 1..7 {
                 y_next.assign(&self.y);
                 for j in 0..s {
                     y_next += &(k[j].to_owned() * (self.h * self.coeffs.a(s + 1, j + 1)));
                 }
-                (self.f)(self.x + self.h * self.coeffs.c(s + 1), &y_next, &mut k[s]);
+                self.f.system(self.x + self.h * self.coeffs.c(s + 1), &y_next, &mut k[s]);
                 if s == 5 {
                     y_stiff.assign(&y_next);
                 }
@@ -368,21 +364,21 @@ impl Dopri5 {
 
             // Compute error
             let mut err = 0.0;
-            for i in 0..dim {
+            for i in 0..F::DIM {
                 let y_i: f64 = self.y[i];
                 let y_next_i: f64 = y_next[i];
                 let sc_i: f64 = self.atol + y_i.abs().max(y_next_i.abs()) * self.rtol;
                 let err_est_i: f64 = k[3][i];
                 err += (err_est_i / sc_i) * (err_est_i / sc_i);
             }
-            err = (err / dim as f64).sqrt();
+            err = (err / F::DIM as f64).sqrt();
 
             // Step size control
             if self.controller.accept(err, self.h, &mut h_new) {
                 self.stats.accepted_steps += 1;
 
                 // Stifness detection
-                if (self.stats.accepted_steps % self.n_stiff != 0) || dim > 0 {
+                if (self.stats.accepted_steps % self.n_stiff != 0) || F::DIM > 0 {
                     let kd = k[1].to_owned() - &k[5];
                     let num: f64 = kd.dot(&kd);
                     let yd = y_next.to_owned() - &y_stiff;

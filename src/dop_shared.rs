@@ -1,6 +1,13 @@
 use std::error::Error;
 use std::fmt;
 
+type V = ndarray::Array1<f64>;
+
+pub trait System {
+    const DIM: usize;
+    fn system(&self, x: f64, y: &V, dy: &mut V);
+}
+
 /// Enumeration of the types of the integration output.
 #[derive(PartialEq, Eq)]
 pub enum OutputType {

@@ -64,8 +64,8 @@ impl DefaultController for Controller {
     }
 }
 /// Structure containing the parameters for the numerical integration.
-pub struct Dop853 {
-    f: fn(f64, &V, &mut V),
+pub struct Dop853<F: System> {
+    f: F,
     x: f64,
     x0: f64,
     x_old: f64,
@@ -89,7 +89,7 @@ pub struct Dop853 {
     stats: Stats,
 }
 
-impl Dop853 {
+impl<F: System> Dop853<F> {
     /// Default initializer for the structure.
     ///
     /// # Arguments
@@ -103,7 +103,7 @@ impl Dop853 {
     /// * `atol`    - Absolute tolerance used in the computation of the adaptive step size
     ///
     pub fn new(
-        f: fn(f64, &V, &mut V),
+        f: F,
         x: f64,
         x_end: f64,
         dx: f64,
@@ -111,7 +111,6 @@ impl Dop853 {
         rtol: f64,
         atol: f64,
     ) -> Self {
-        let dim = y.dim();
         Self {
             f,
             x,
@@ -133,7 +132,7 @@ impl Dop853 {
             coeffs: Dopri853::new(),
             controller: Controller::default(x, x_end),
             out_type: OutputType::Dense,
-            rcont: W::zeros((8, dim)),
+            rcont: W::zeros((8, F::DIM)),
             stats: Stats::new(),
         }
     }
@@ -161,7 +160,7 @@ impl Dop853 {
     ///
     #[allow(clippy::too_many_arguments)]
     pub fn from_param(
-        f: fn(f64, &V, &mut V),
+        f: F,
         x: f64,
         x_end: f64,
         dx: f64,
@@ -179,7 +178,6 @@ impl Dop853 {
         out_type: OutputType,
     ) -> Self {
         let alpha = 1.0 / 8.0 - beta * 0.2;
-        let dim = y.dim();
         Self {
             f,
             x,
@@ -209,22 +207,21 @@ impl Dop853 {
                 sign(1.0, x_end - x),
             ),
             out_type,
-            rcont: W::zeros((8, dim)),
+            rcont: W::zeros((8, F::DIM)),
             stats: Stats::new(),
         }
     }
 
     /// Compute the initial stepsize
     fn hinit(&self) -> f64 {
-        let dim = self.y.dim();
-        let mut f0 = V::zeros(dim);
-        (self.f)(self.x, &self.y, &mut f0);
+        let mut f0 = V::zeros(F::DIM);
+        self.f.system(self.x, &self.y, &mut f0);
         let posneg = sign(1.0, self.x_end - self.x);
 
         // Compute the norm of y0 and f0
         let mut d0 = 0.0;
         let mut d1 = 0.0;
-        for i in 0..dim {
+        for i in 0..F::DIM {
             let y_i: f64 = self.y[i];
             let sci: f64 = self.atol + y_i.abs() * self.rtol;
             d0 += (y_i / sci) * (y_i / sci);
@@ -243,12 +240,12 @@ impl Dop853 {
         h0 = sign(h0, posneg);
 
         let y1 = f0.to_owned() * h0 + &self.y;
-        let mut f1 = V::zeros(dim);
-        (self.f)(self.x + h0, &y1, &mut f1);
+        let mut f1 = V::zeros(F::DIM);
+        self.f.system(self.x + h0, &y1, &mut f1);
 
         // Compute the norm of f1-f0 divided by h0
         let mut d2: f64 = 0.0;
-        for i in 0..dim {
+        for i in 0..F::DIM {
             let f0_i: f64 = f0[i];
             let f1_i: f64 = f1[i];
             let y_i: f64 = self.y[i];
@@ -276,7 +273,6 @@ impl Dop853 {
         let mut n_step = 0;
         let mut last = false;
         let mut h_new = 0.0;
-        let dim = self.y.dim();
         let mut iter_non_stiff = 1..7;
         let mut iter_iasti = 1..16;
         let posneg = sign(1.0, self.x_end - self.x);
@@ -291,8 +287,8 @@ impl Dop853 {
         let y_tmp = self.y.to_owned();
         self.solution_output(y_tmp);
 
-        let mut k = vec![V::zeros(dim); 12];
-        (self.f)(self.x, &self.y, &mut k[0]);
+        let mut k = vec![V::zeros(F::DIM); 12];
+        self.f.system(self.x, &self.y, &mut k[0]);
         self.stats.num_eval += 1;
 
         // Main loop
@@ -317,13 +313,13 @@ impl Dop853 {
             n_step += 1;
 
             // 12 Stages
-            let mut y_next = V::zeros(dim);
+            let mut y_next = V::zeros(F::DIM);
             for s in 1..12 {
                 y_next.assign(&self.y);
                 for j in 0..s {
                     y_next += &(k[j].to_owned() * (self.h * self.coeffs.a(s + 1, j + 1)));
                 }
-                (self.f)(self.x + self.h * self.coeffs.c(s + 1), &y_next, &mut k[s]);
+                self.f.system(self.x + self.h * self.coeffs.c(s + 1), &y_next, &mut k[s]);
             }
             k[1] = k[10].to_owned();
             k[2] = k[11].to_owned();
@@ -340,7 +336,7 @@ impl Dop853 {
             k[4] = k[3].to_owned() * self.h + &self.y;
 
             // Error estimate
-            let mut err_est = V::zeros(dim);
+            let mut err_est = V::zeros(F::DIM);
             for i in 0..12 {
                 err_est += &(k[i].to_owned() * self.coeffs.e(i + 1));
             }
@@ -352,7 +348,7 @@ impl Dop853 {
                 - k[0].to_owned() * self.coeffs.bhh(1)
                 - k[8].to_owned() * self.coeffs.bhh(2)
                 - k[2].to_owned() * self.coeffs.bhh(3);
-            for i in 0..dim {
+            for i in 0..F::DIM {
                 let y_i: f64 = self.y[i];
                 let k5_i: f64 = k[4][i];
                 let sc_i: f64 = self.atol + y_i.abs().max(k5_i.abs()) * self.rtol;
@@ -368,17 +364,17 @@ impl Dop853 {
                 deno = 1.0;
             }
 
-            err = self.h.abs() * err * (1.0 / (deno * dim as f64)).sqrt();
+            err = self.h.abs() * err * (1.0 / (deno * F::DIM as f64)).sqrt();
 
             // Step size control
             if self.controller.accept(err, self.h, &mut h_new) {
                 self.stats.accepted_steps += 1;
                 let y_tmp = k[4].to_owned();
-                (self.f)(self.x + self.h, &y_tmp, &mut k[3]);
+                self.f.system(self.x + self.h, &y_tmp, &mut k[3]);
                 self.stats.num_eval += 1;
 
                 // Stifness detection
-                if (self.stats.accepted_steps % self.n_stiff != 0) || dim > 0 {
+                if (self.stats.accepted_steps % self.n_stiff != 0) || F::DIM > 0 {
                     let kd = k[3].to_owned() - &k[2];
                     let num: f64 = kd.dot(&kd);
                     let yd = k[4].to_owned() - &y_next;
@@ -410,7 +406,7 @@ impl Dop853 {
                         .row_mut(3)
                         .assign(&(-k[3].to_owned() * self.h + y_diff - bspl));
                     for i in 4..8 {
-                        self.rcont.row_mut(i).assign(&V::zeros(dim));
+                        self.rcont.row_mut(i).assign(&V::zeros(F::DIM));
                         let rcontcopy = self.rcont.clone();
                         for j in 1..13 {
                             self.rcont.row_mut(i).assign(
@@ -430,7 +426,7 @@ impl Dop853 {
                             + k[2].to_owned() * self.coeffs.a(14, 12)
                             + k[3].to_owned() * self.coeffs.a(14, 13))
                             * self.h;
-                    (self.f)(self.x + self.h * self.coeffs.c(14), &y_next, &mut k[9]);
+                    self.f.system(self.x + self.h * self.coeffs.c(14), &y_next, &mut k[9]);
 
                     y_next = self.y.to_owned()
                         + (k[0].to_owned() * self.coeffs.a(15, 1)
@@ -442,7 +438,7 @@ impl Dop853 {
                             + k[3].to_owned() * self.coeffs.a(15, 13)
                             + k[9].to_owned() * self.coeffs.a(15, 14))
                             * self.h;
-                    (self.f)(self.x + self.h * self.coeffs.c(15), &y_next, &mut k[1]);
+                    self.f.system(self.x + self.h * self.coeffs.c(15), &y_next, &mut k[1]);
 
                     y_next = self.y.to_owned()
                         + (k[0].to_owned() * self.coeffs.a(16, 1)
@@ -454,7 +450,7 @@ impl Dop853 {
                             + k[9].to_owned() * self.coeffs.a(16, 14)
                             + k[1].to_owned() * self.coeffs.a(16, 15))
                             * self.h;
-                    (self.f)(self.x + self.h * self.coeffs.c(16), &y_next, &mut k[2]);
+                    self.f.system(self.x + self.h * self.coeffs.c(16), &y_next, &mut k[2]);
 
                     self.stats.num_eval += 3;
 
