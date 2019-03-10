@@ -115,6 +115,7 @@ impl<F: System> Dopri5<F> {
         rtol: f64,
         atol: f64,
     ) -> Self {
+        assert_eq!(y.dim(), F::DIM);
         Self {
             f,
             x,
@@ -181,6 +182,7 @@ impl<F: System> Dopri5<F> {
         n_stiff: u32,
         out_type: OutputType,
     ) -> Self {
+        assert_eq!(y.dim(), F::DIM);
         let alpha = 0.2 - beta * 0.75;
         Self {
             f,
