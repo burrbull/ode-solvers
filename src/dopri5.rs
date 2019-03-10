@@ -420,7 +420,7 @@ impl<F: System> Dopri5<F> {
                 self.x += self.h;
                 self.h_old = self.h;
 
-                self.solution_output(y_next.to_owned());
+                self.solution_output(y_next.to_owned(), &k);
 
                 if (self.solout)(self.x, &self.y, &k[0]) {
                     last = true;
@@ -439,7 +439,7 @@ impl<F: System> Dopri5<F> {
         Ok(self.stats)
     }
 
-    fn solution_output(&mut self, y_next: V) {
+    fn solution_output(&mut self, y_next: V, k: &Vec<V>) {
         if self.out_type == OutputType::Dense {
             while self.xd.abs() <= self.x.abs() {
                 if self.x_old.abs() <= self.xd.abs() && self.x.abs() >= self.xd.abs() {
@@ -455,6 +455,9 @@ impl<F: System> Dopri5<F> {
                             + self.rcont.row(0),
                     );
                     self.xd += self.dx;
+                    if (self.solout)(self.x, &self.y_out.last().unwrap(), &k[0]) {
+                        break;
+                    }
                 }
             }
         } else {
