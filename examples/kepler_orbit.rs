@@ -30,7 +30,6 @@ fn main() {
 
     let solver = Solver;
     let mut stepper = Dopri5::new(solver, 0.0, 5.0 * period, 60.0, y0, 1.0e-10, 1.0e-10);
-    stepper.set_solout(|_t, y, _dy| y[0] > 25500.);
     let res = stepper.integrate();
 
     // Handle result
@@ -60,6 +59,10 @@ impl ode_solvers::System for Solver {
         dy[4] = -MU * y[1] / r.powi(3);
         dy[5] = -MU * y[2] / r.powi(3);
     }
+    // Stop the integration if x exceeds 25,500 km. Optional
+    //fn solout(&self, _t: Time, y: &State, _dy: &State) -> bool {
+    //    y[0] > 25500.
+    //}
 }
 
 pub fn save(times: &Vec<Time>, states: &Vec<State>, filename: &Path) {
