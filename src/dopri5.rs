@@ -90,7 +90,6 @@ pub struct Dopri5<F: System> {
     out_type: OutputType,
     rcont: W,
     stats: Stats,
-    solout: fn(f64, &V, &V) -> bool,
 }
 
 impl<F: System> Dopri5<F> {
@@ -138,7 +137,6 @@ impl<F: System> Dopri5<F> {
             out_type: OutputType::Dense,
             rcont: W::zeros((5, F::DIM)),
             stats: Stats::new(),
-            solout: |_, _, _| false,
         }
     }
 
@@ -214,7 +212,6 @@ impl<F: System> Dopri5<F> {
             out_type,
             rcont: W::zeros((5, F::DIM)),
             stats: Stats::new(),
-            solout: |_, _, _| false,
         }
     }
 
@@ -270,11 +267,6 @@ impl<F: System> Dopri5<F> {
             (100. * h0.abs()).min(h1.min(self.controller.h_max())),
             posneg,
         )
-    }
-
-    /// Set stop function will be called at every successful integration step.
-    pub fn set_solout(&mut self, solout: fn(f64, &V, &V) -> bool) {
-        self.solout = solout;
     }
 
     /// Core integration method.
@@ -422,7 +414,7 @@ impl<F: System> Dopri5<F> {
 
                 self.solution_output(y_next.to_owned(), &k);
 
-                if (self.solout)(self.x, &self.y, &k[0]) {
+                if self.f.solout(self.x, &self.y, &k[0]) {
                     last = true;
                 }
 
@@ -455,7 +447,7 @@ impl<F: System> Dopri5<F> {
                             + self.rcont.row(0),
                     );
                     self.xd += self.dx;
-                    if (self.solout)(self.x, &self.y_out.last().unwrap(), &k[0]) {
+                    if self.f.solout(self.x, &self.y_out.last().unwrap(), &k[0]) {
                         break;
                     }
                 }
